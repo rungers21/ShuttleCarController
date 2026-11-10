@@ -3,8 +3,496 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:prism="http://prismlibrary.com/"
         prism:ViewModelLocator.AutoWireViewModel="True"
-        Title="{Binding Title}" Height="350" Width="525" >
-    <Grid>
-        <ContentControl prism:RegionManager.RegionName="ContentRegion" />
+        Title="二向穿梭车上位机"
+        Width="1200"
+        Height="800"
+        MinWidth="1100"
+        MinHeight="720"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource AppBackgroundBrush}">
+    <!--
+        单窗口六区布局：
+        左侧固定 Modbus 连接区，右侧依次为基础调试、业务命令、参数解析/数据表和日志。
+        各内容区使用固定或星号高度并配置 ScrollViewer/DataGrid 滚动，缩小窗口时不会裁掉操作入口。
+    -->
+    <Grid Margin="12">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="286" />
+            <ColumnDefinition Width="10" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Modbus 区：连接参数、链路状态和数据年龄；连接中会锁定配置编辑。 -->
+        <Border Grid.Column="0" Style="{StaticResource CardStyle}">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <TextBlock Text="Modbus" Style="{StaticResource SectionTitleStyle}" />
+
+                    <Border Background="#F8FAFD" BorderBrush="#E5EBF4" BorderThickness="1"
+                            CornerRadius="6" Padding="10" Margin="0,0,0,12">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,7">
+                                <Ellipse Width="10" Height="10" Margin="0,0,7,0">
+                                    <Ellipse.Style>
+                                        <Style TargetType="Ellipse">
+                                            <Setter Property="Fill" Value="#9AA5B5" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding ConnectionState}" Value="Connected">
+                                                    <Setter Property="Fill" Value="#2E9D63" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding ConnectionState}" Value="Connecting">
+                                                    <Setter Property="Fill" Value="#D39B24" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding ConnectionState}" Value="Reconnecting">
+                                                    <Setter Property="Fill" Value="#D39B24" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding ConnectionState}" Value="Faulted">
+                                                    <Setter Property="Fill" Value="#C53B3B" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Ellipse.Style>
+                                </Ellipse>
+                                <TextBlock Text="{Binding ConnectionStateText}" FontWeight="SemiBold" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding ConnectionMessage}" Foreground="{StaticResource MutedBrush}"
+                                       TextWrapping="Wrap" FontSize="11" />
+                            <TextBlock Text="{Binding ClientAvailabilityText}" Margin="0,6,0,0"
+                                       TextWrapping="Wrap" FontSize="11">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{StaticResource MutedBrush}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsClientAvailable}" Value="False">
+                                                <Setter Property="Foreground" Value="#B26A00" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="IP 地址" Style="{StaticResource FieldLabelStyle}" />
+                    <TextBox Text="{Binding Settings.IpAddress, UpdateSourceTrigger=PropertyChanged}"
+                             IsEnabled="{Binding IsConnectionSettingsEditable}"
+                             ToolTip="IPv4 地址，例如 192.168.0.10"
+                             Margin="0,0,0,8" />
+
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="端口" Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding Settings.Port, UpdateSourceTrigger=PropertyChanged}"
+                                     IsEnabled="{Binding IsConnectionSettingsEditable}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="站号" Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding Settings.UnitId, UpdateSourceTrigger=PropertyChanged}"
+                                     IsEnabled="{Binding IsConnectionSettingsEditable}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <TextBlock Text="请求超时 (ms)" Style="{StaticResource FieldLabelStyle}" />
+                    <TextBox Text="{Binding Settings.RequestTimeoutMs, UpdateSourceTrigger=PropertyChanged}"
+                             IsEnabled="{Binding IsConnectionSettingsEditable}" Margin="0,0,0,8" />
+
+                    <TextBlock Text="轮询周期 (ms)" Style="{StaticResource FieldLabelStyle}" />
+                    <TextBox Text="{Binding Settings.PollIntervalMs, UpdateSourceTrigger=PropertyChanged}"
+                             IsEnabled="{Binding IsConnectionSettingsEditable}" Margin="0,0,0,8" />
+
+                    <TextBlock Text="重连间隔 (ms)" Style="{StaticResource FieldLabelStyle}" />
+                    <TextBox Text="{Binding Settings.ReconnectIntervalMs, UpdateSourceTrigger=PropertyChanged}"
+                             IsEnabled="{Binding IsConnectionSettingsEditable}" Margin="0,0,0,12" />
+
+                    <Grid Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0" Content="连接" Command="{Binding ConnectCommand}"
+                                Style="{StaticResource PrimaryButtonStyle}" />
+                        <Button Grid.Column="2" Content="断开" Command="{Binding DisconnectCommand}" />
+                    </Grid>
+
+                    <Separator Margin="0,2,0,12" />
+
+                    <TextBlock Text="数据新鲜度" Style="{StaticResource FieldLabelStyle}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <TextBlock Text="{Binding DataAgeText}" Style="{StaticResource ValueTextStyle}" />
+                        <TextBlock Text=" / " Foreground="{StaticResource MutedBrush}" Margin="4,0" />
+                        <TextBlock Text="{Binding Snapshot.QualityText}" Style="{StaticResource ValueTextStyle}" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding Snapshot.QualityMessage}" TextWrapping="Wrap"
+                               FontSize="11" Foreground="{StaticResource MutedBrush}" />
+
+                    <Separator Margin="0,12" />
+                    <TextBlock Text="当前状态" Style="{StaticResource FieldLabelStyle}" />
+                    <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" FontSize="11" />
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <Grid Grid.Column="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="190" />
+                <RowDefinition Height="165" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="180" />
+            </Grid.RowDefinitions>
+
+            <!-- 基础控制区 -->
+            <Border Grid.Row="0" Style="{StaticResource CardStyle}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <TextBlock Text="基础控制 / Modbus 原始读写" Style="{StaticResource SectionTitleStyle}" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.15*" />
+                            <ColumnDefinition Width="0.9*" />
+                            <ColumnDefinition Width="0.65*" />
+                            <ColumnDefinition Width="1.15*" />
+                            <ColumnDefinition Width="1.5*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                            <TextBlock Text="读功能码" Style="{StaticResource FieldLabelStyle}" />
+                            <ComboBox ItemsSource="{Binding ReadFunctionCodes}"
+                                      SelectedItem="{Binding SelectedReadFunctionCode}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="0,0,8,0">
+                            <TextBlock Text="起始地址（支持 0x）" Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding RawStartAddressText, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" Margin="0,0,8,0">
+                            <TextBlock Text="读取数量" Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding RawQuantity, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="3" Margin="0,0,8,0">
+                            <TextBlock Text="写功能码" Style="{StaticResource FieldLabelStyle}" />
+                            <ComboBox ItemsSource="{Binding WriteFunctionCodes}"
+                                      SelectedItem="{Binding SelectedWriteFunctionCode}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="4">
+                            <TextBlock Text="写入值（0x 十六进制，空格或逗号分隔）" Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding RawWriteValuesText, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,12,0,10">
+                        <Button Content="读取一次" Command="{Binding ReadRawCommand}"
+                                Style="{StaticResource PrimaryButtonStyle}" />
+                        <Button Content="写入一次" Command="{Binding WriteRawCommand}"
+                                Style="{StaticResource DangerButtonStyle}" />
+                        <TextBlock Text="原始写仅用于协议联调，执行前会二次确认。" Foreground="{StaticResource MutedBrush}"
+                                   FontSize="11" Margin="6,0,0,0" />
+                    </StackPanel>
+
+                    <!-- RawResultText 只有私有 setter，必须显式单向绑定，否则 WPF 默认 TwoWay 会在加载时抛异常。 -->
+                    <TextBox Text="{Binding RawResultText, Mode=OneWay}" IsReadOnly="True" TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto" Background="#F8FAFD"
+                             MinHeight="48" MaxHeight="72" FontFamily="Consolas" />
+                </StackPanel>
+                </ScrollViewer>
+            </Border>
+
+            <!-- 按钮 / 参数值区 -->
+            <Border Grid.Row="1" Style="{StaticResource CardStyle}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <TextBlock Text="按钮 / 参数值" Style="{StaticResource SectionTitleStyle}" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1*" />
+                            <ColumnDefinition Width="1*" />
+                            <ColumnDefinition Width="1*" />
+                            <ColumnDefinition Width="1*" />
+                            <ColumnDefinition Width="1.25*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                            <TextBlock Text="任务类型（原始值）" Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding TaskType, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="0,0,8,0">
+                            <TextBlock Text="出库方式（原始值）" Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding OutboundMode, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" Margin="0,0,8,0">
+                            <TextBlock Text="车体方向（原始值）" Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding BodyDirection, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="3" Margin="0,0,8,0">
+                            <TextBlock Text="入库后退（原始值）" Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding EntryBack, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="4">
+                            <TextBlock Text="任务号" Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding TaskNumberInput, UpdateSourceTrigger=PropertyChanged}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <WrapPanel Margin="0,12,0,8">
+                        <Button Content="下发任务" Command="{Binding StartTaskCommand}"
+                                Style="{StaticResource PrimaryButtonStyle}" />
+                        <Button Content="确认完成" Command="{Binding ConfirmCompleteCommand}" />
+                        <Button Content="盘点清零" Command="{Binding InventoryResetCommand}"
+                                Style="{StaticResource DangerButtonStyle}" />
+                        <Button Content="初始化" Command="{Binding InitializeCommand}"
+                                Style="{StaticResource DangerButtonStyle}" />
+                        <Button Content="清除异常" Command="{Binding ClearFaultCommand}"
+                                Style="{StaticResource DangerButtonStyle}" />
+                    </WrapPanel>
+
+                    <WrapPanel>
+                        <TextBlock Text="活动任务号：" Foreground="{StaticResource MutedBrush}" />
+                        <TextBlock Text="{Binding ActiveTaskNumberText}" FontWeight="SemiBold" Margin="0,0,16,0" />
+                        <TextBlock Text="命令阶段：" Foreground="{StaticResource MutedBrush}" />
+                        <TextBlock Text="{Binding CommandPhase}" FontWeight="SemiBold" />
+                        <TextBlock Text="  提示：枚举数值含义及任务握手需按最终协议实现。" Foreground="{StaticResource MutedBrush}"
+                                   FontSize="11" />
+                    </WrapPanel>
+                </StackPanel>
+                </ScrollViewer>
+            </Border>
+
+            <!-- 参数解析 / 数据表 -->
+            <Grid Grid.Row="2">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="0.95*" />
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="1.55*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Style="{StaticResource CardStyle}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0">
+                            <TextBlock Text="参数解析" Style="{StaticResource SectionTitleStyle}" />
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <TextBlock Text="质量：" Foreground="{StaticResource MutedBrush}" />
+                                <TextBlock Text="{Binding Snapshot.QualityText}" FontWeight="SemiBold" Margin="0,0,14,0" />
+                                <TextBlock Text="更新：" Foreground="{StaticResource MutedBrush}" />
+                                <TextBlock Text="{Binding Snapshot.UpdatedAtText}" FontWeight="SemiBold" />
+                            </StackPanel>
+                        </StackPanel>
+
+                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                            <StackPanel>
+                                <UniformGrid Columns="2">
+                                    <Border Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="小车状态" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBlock Text="{Binding Snapshot.CarStateText}" Style="{StaticResource ValueTextStyle}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="任务号" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBlock Text="{Binding Snapshot.TaskNumberText}" Style="{StaticResource ValueTextStyle}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="出库方式" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBlock Text="{Binding Snapshot.OutboundModeText}" Style="{StaticResource ValueTextStyle}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="车体方向" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBlock Text="{Binding Snapshot.BodyDirectionText}" Style="{StaticResource ValueTextStyle}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="巷道状态" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBlock Text="{Binding Snapshot.AisleStateText}" Style="{StaticResource ValueTextStyle}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="任务完成" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBlock Text="{Binding Snapshot.TaskCompletedText}" Style="{StaticResource ValueTextStyle}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="当前层 / 列 / 排 / 巷道" Style="{StaticResource FieldLabelStyle}" />
+                                            <!-- Run.Text 的默认绑定模式也是 TwoWay，只读快照属性必须指定 OneWay。 -->
+                                            <TextBlock Style="{StaticResource ValueTextStyle}">
+                                                <Run Text="{Binding Snapshot.PositionLayerText, Mode=OneWay}" />
+                                                <Run Text=" / " />
+                                                <Run Text="{Binding Snapshot.PositionColumnText, Mode=OneWay}" />
+                                                <Run Text=" / " />
+                                                <Run Text="{Binding Snapshot.PositionRowText, Mode=OneWay}" />
+                                                <Run Text=" / " />
+                                                <Run Text="{Binding Snapshot.PositionAisleText, Mode=OneWay}" />
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="电量（原始值，无单位）" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBlock Text="{Binding Snapshot.BatteryText}" Style="{StaticResource ValueTextStyle}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="车号 / 车辆连接" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBlock Style="{StaticResource ValueTextStyle}">
+                                                <Run Text="{Binding Snapshot.CarNumberText, Mode=OneWay}" />
+                                                <Run Text=" / " />
+                                                <Run Text="{Binding Snapshot.VehicleConnectionText, Mode=OneWay}" />
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="在 A 侧 / 在 B 侧" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBlock Style="{StaticResource ValueTextStyle}">
+                                                <Run Text="{Binding Snapshot.AtSideAText, Mode=OneWay}" />
+                                                <Run Text=" / " />
+                                                <Run Text="{Binding Snapshot.AtSideBText, Mode=OneWay}" />
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="货物状态" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBlock Text="{Binding Snapshot.CargoStateText}" Style="{StaticResource ValueTextStyle}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel>
+                                            <TextBlock Text="出入库未完成" Style="{StaticResource FieldLabelStyle}" />
+                                            <TextBlock Text="{Binding Snapshot.InOutStateText}" Style="{StaticResource ValueTextStyle}" />
+                                        </StackPanel>
+                                    </Border>
+                                </UniformGrid>
+
+                                <TextBlock Text="报警" Style="{StaticResource FieldLabelStyle}" Margin="0,6,0,5" />
+                                <TextBlock Text="{Binding Snapshot.AlarmText}" Style="{StaticResource ValueTextStyle}"
+                                           Foreground="{StaticResource DangerBrush}" Margin="0,0,0,6" />
+                                <ItemsControl ItemsSource="{Binding Snapshot.Alarms}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="#FFF8F8" BorderBrush="#F0D6D6" BorderThickness="1"
+                                                    CornerRadius="4" Padding="8,5" Margin="0,0,0,4">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock Grid.Column="0" Text="{Binding DisplayName}" TextWrapping="Wrap" />
+                                                    <TextBlock Grid.Column="1" Text="{Binding ActiveText}" FontWeight="SemiBold"
+                                                               Foreground="{StaticResource DangerBrush}" Margin="8,0,0,0" />
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <TextBlock Text="未收到故障明细时，以报警码和完整数据表为准。" Foreground="{StaticResource MutedBrush}"
+                                           FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Column="2" Style="{StaticResource CardStyle}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <StackPanel Grid.Row="0">
+                            <TextBlock Text="数据表" Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="字段由 IShuttleCarClient 按最终协议映射后提供；未确认地址显示为“待配置”。"
+                                       Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,8"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                        <!--
+                            数据表可能包含上百条协议字段。
+                            显式启用行列虚拟化和容器回收，避免缩放或轮询刷新时创建大量无效可视元素。
+                        -->
+                        <DataGrid Grid.Row="1" ItemsSource="{Binding Snapshot.Fields}"
+                                  AlternationCount="2" IsReadOnly="True" AutoGenerateColumns="False"
+                                  EnableRowVirtualization="True" EnableColumnVirtualization="True"
+                                  VirtualizingPanel.VirtualizationMode="Recycling"
+                                  ScrollViewer.CanContentScroll="True" ScrollViewer.IsDeferredScrollingEnabled="True"
+                                  HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="数据区" Binding="{Binding Area}" Width="105" />
+                                <DataGridTextColumn Header="字段" Binding="{Binding Name}" Width="135" />
+                                <DataGridTextColumn Header="DB 偏移" Binding="{Binding DbOffset}" Width="75" />
+                                <DataGridTextColumn Header="Modbus 地址" Binding="{Binding ModbusAddress}" Width="105" />
+                                <DataGridTextColumn Header="类型" Binding="{Binding DataType}" Width="70" />
+                                <DataGridTextColumn Header="原始值" Binding="{Binding RawValue}" Width="105" />
+                                <DataGridTextColumn Header="解析值" Binding="{Binding DecodedValue}" Width="120" />
+                                <DataGridTextColumn Header="质量" Binding="{Binding QualityText}" Width="65" />
+                                <DataGridTextColumn Header="更新时间" Binding="{Binding UpdatedAtText}" Width="90" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <!-- 日志区 -->
+            <Border Grid.Row="3" Style="{StaticResource CardStyle}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="日志 / 操作记录" Style="{StaticResource SectionTitleStyle}" Margin="0" />
+                            <TextBlock Text="界面缓存" Foreground="{StaticResource MutedBrush}" Margin="12,0,3,0" />
+                            <TextBlock Text="{Binding Logs.Count}" FontWeight="SemiBold" />
+                            <TextBlock Text="条" Foreground="{StaticResource MutedBrush}" Margin="3,0,0,0" />
+                            <TextBlock Text="文件日志：%LocalAppData%\ShuttleCarController\Logs"
+                                       Foreground="{StaticResource MutedBrush}" Margin="16,0,0,0" />
+                        </StackPanel>
+                        <Button HorizontalAlignment="Right" Content="清空视图"
+                                Command="{Binding ClearLogViewCommand}" />
+                    </Grid>
+                    <!-- 日志界面最多 1000 条；虚拟化只创建当前可见行，清空视图不会删除文件日志。 -->
+                    <DataGrid Grid.Row="1" ItemsSource="{Binding Logs}" IsReadOnly="True"
+                              AutoGenerateColumns="False" AlternationCount="2"
+                              EnableRowVirtualization="True" EnableColumnVirtualization="True"
+                              VirtualizingPanel.VirtualizationMode="Recycling"
+                              ScrollViewer.CanContentScroll="True" ScrollViewer.IsDeferredScrollingEnabled="True"
+                              HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="时间" Binding="{Binding TimeText}" Width="92" />
+                            <DataGridTextColumn Header="级别" Binding="{Binding LevelText}" Width="60">
+                                <DataGridTextColumn.ElementStyle>
+                                    <Style TargetType="TextBlock">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Level}" Value="Error">
+                                                <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+                                                <Setter Property="FontWeight" Value="SemiBold" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding Level}" Value="Warning">
+                                                <Setter Property="Foreground" Value="#A86A00" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DataGridTextColumn.ElementStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="分类" Binding="{Binding CategoryText}" Width="60" />
+                            <DataGridTextColumn Header="事件" Binding="{Binding Message}" Width="2*" />
+                            <DataGridTextColumn Header="详细信息" Binding="{Binding Detail}" Width="3*" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </Grid>
+            </Border>
+        </Grid>
     </Grid>
 </Window>

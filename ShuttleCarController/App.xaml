@@ -2,8 +2,124 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:ShuttleCarController"
-             xmlns:prism="http://prismlibrary.com/" >
+             xmlns:prism="http://prismlibrary.com/">
     <Application.Resources>
-         
+        <!--
+            全局视觉基准：
+            浅灰蓝背景用于降低工业监控界面的视觉疲劳，蓝色表示普通主操作，红色表示高风险或故障。
+            组件统一使用 Microsoft YaHei UI，保证中文字段和日志在不同 DPI 下仍易读。
+        -->
+        <Color x:Key="AppBackgroundColor">#F3F6FA</Color>
+        <Color x:Key="CardBorderColor">#DDE4EE</Color>
+        <Color x:Key="PrimaryColor">#1F6FEB</Color>
+        <Color x:Key="DangerColor">#C53B3B</Color>
+        <Color x:Key="MutedColor">#677489</Color>
+        <SolidColorBrush x:Key="AppBackgroundBrush" Color="{StaticResource AppBackgroundColor}" />
+        <SolidColorBrush x:Key="CardBorderBrush" Color="{StaticResource CardBorderColor}" />
+        <SolidColorBrush x:Key="PrimaryBrush" Color="{StaticResource PrimaryColor}" />
+        <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}" />
+        <SolidColorBrush x:Key="MutedBrush" Color="{StaticResource MutedColor}" />
+        <SolidColorBrush x:Key="SoftBackgroundBrush" Color="#F8FAFD" />
+
+        <Style TargetType="{x:Type Window}">
+            <Setter Property="FontFamily" Value="Microsoft YaHei UI" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+
+        <Style TargetType="{x:Type TextBlock}">
+            <Setter Property="FontFamily" Value="Microsoft YaHei UI" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <!-- 六个功能区域共用同一套卡片、标题、字段标签和值文本样式。 -->
+        <Style x:Key="SectionTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#1B2638" />
+            <Setter Property="Margin" Value="0,0,0,10" />
+        </Style>
+
+        <Style x:Key="FieldLabelStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+
+        <Style x:Key="ValueTextStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#1B2638" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+
+        <Style x:Key="CardStyle" TargetType="Border">
+            <Setter Property="Background" Value="White" />
+            <Setter Property="BorderBrush" Value="{StaticResource CardBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="14" />
+            <Setter Property="Margin" Value="0,0,0,10" />
+        </Style>
+
+        <Style x:Key="MetricCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource SoftBackgroundBrush}" />
+            <Setter Property="BorderBrush" Value="#E8EDF5" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="10,8" />
+            <Setter Property="Margin" Value="0,0,8,8" />
+        </Style>
+
+        <Style TargetType="TextBox">
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="Padding" Value="7,4" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="BorderBrush" Value="#C9D3E1" />
+            <Setter Property="Background" Value="White" />
+            <Setter Property="Foreground" Value="#1B2638" />
+        </Style>
+
+        <Style TargetType="ComboBox">
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="Padding" Value="6,3" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+
+        <Style TargetType="Button">
+            <Setter Property="MinHeight" Value="31" />
+            <Setter Property="Padding" Value="13,5" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="Background" Value="#E9EFF8" />
+            <Setter Property="BorderBrush" Value="#C9D6E8" />
+            <Setter Property="Foreground" Value="#21324B" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+
+        <!-- 主操作、危险操作和默认按钮通过颜色区分；危险操作仍需 ViewModel 二次确认。 -->
+        <Style x:Key="PrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="{StaticResource PrimaryBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource PrimaryBrush}" />
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+
+        <Style x:Key="DangerButtonStyle" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="#FBEAEA" />
+            <Setter Property="BorderBrush" Value="#E8B9B9" />
+            <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+        </Style>
+
+        <!-- 数据表和日志默认只读；具体 DataGrid 额外启用回收虚拟化以控制缩放时的内存占用。 -->
+        <Style TargetType="DataGrid">
+            <Setter Property="Background" Value="White" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="RowHeaderWidth" Value="0" />
+            <Setter Property="HeadersVisibility" Value="Column" />
+            <Setter Property="GridLinesVisibility" Value="Horizontal" />
+            <Setter Property="HorizontalGridLinesBrush" Value="#EDF1F6" />
+            <Setter Property="AlternatingRowBackground" Value="#FAFBFD" />
+            <Setter Property="CanUserAddRows" Value="False" />
+            <Setter Property="CanUserDeleteRows" Value="False" />
+            <Setter Property="IsReadOnly" Value="True" />
+            <Setter Property="AutoGenerateColumns" Value="False" />
+        </Style>
     </Application.Resources>
 </prism:PrismApplication>

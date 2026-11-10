@@ -1,11 +1,17 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
+    <!-- Windows 桌面 WPF 应用；启动入口和主窗口由 PrismApplication 管理。 -->
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <!-- WPF 隐式 using 不包含 System.IO，配置/日志文件仍显式引用；Nullable 用于表达可选通信实现。 -->
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <!-- NModbus 预留给后续 IShuttleCarClient 的 Modbus TCP/RTU 实现；当前代码只定义接口。 -->
     <PackageReference Include="NModbus" Version="3.0.83" />
+    <!-- Prism 提供 MVVM、DelegateCommand 和 DryIoc 依赖注入。 -->
     <PackageReference Include="Prism.DryIoc" Version="9.0.537" />
   </ItemGroup>
 </Project>
