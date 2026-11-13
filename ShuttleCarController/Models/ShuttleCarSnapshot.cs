@@ -202,6 +202,18 @@ public sealed record ShuttleCarSnapshot
     /// <summary>根据“上方无货”位生成的简单文本；完整冲突判断由适配层负责。</summary>
     public string NoGoodsText => NoGoods ? "无货" : "有货";
 
+    /// <summary>
+    /// 交互区“上方有货/上方无货”两个位的一致化显示。
+    /// 同时为真表示协议状态冲突，同时为假表示货物状态未确定，均不能猜测为“正常”。
+    /// </summary>
+    public string CargoPresenceText => (HasGoods, NoGoods) switch
+    {
+        (true, true) => "状态冲突（有货/无货同时为真）",
+        (false, false) => "未确定",
+        (true, false) => "有货",
+        _ => "无货"
+    };
+
     /// <summary>当前层显示文本。</summary>
     public string PositionLayerText => CurrentLayer?.ToString(CultureInfo.InvariantCulture) ?? "--";
 

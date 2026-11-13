@@ -11,4 +11,10 @@ public sealed class AppConfig
 
     /// <summary>最近一次使用的 Modbus 连接与轮询参数。</summary>
     public ConnectionSettings Connection { get; set; } = new();
+
+    /// <summary>
+    /// 设备协议画像标识，对应 <c>IDeviceProtocolProfile.Id</c>。
+    /// 留空或未知时使用二向穿梭车默认画像；修改后重启生效。
+    /// </summary>
+    public string DeviceProfileId { get; set; } = "two-way-shuttle";
 }

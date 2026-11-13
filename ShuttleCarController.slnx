@@ -1,4 +1,5 @@
 <Solution>
+  <Project Path="ShuttleCarController.Tests/ShuttleCarController.Tests.csproj" />
   <Project Path="ShuttleCarController/ShuttleCarController.csproj" />
   <Project Path="ShuttleCarSimulator/ShuttleCarSimulator.csproj" />
 </Solution>

@@ -1,4 +1,4 @@
-﻿<Window x:Class="ShuttleCarController.Views.MainWindow"
+<Window x:Class="ShuttleCarController.Views.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:prism="http://prismlibrary.com/"
@@ -10,10 +10,13 @@
         MinHeight="720"
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource AppBackgroundBrush}">
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+    </Window.Resources>
     <!--
         单窗口六区布局：
         左侧固定 Modbus 连接区，右侧依次为基础调试、业务命令、参数解析/数据表和日志。
-        各内容区使用固定或星号高度并配置 ScrollViewer/DataGrid 滚动，缩小窗口时不会裁掉操作入口。
+        调试区默认折叠，其余内容区使用 Auto/星号高度并配置 ScrollViewer/DataGrid 滚动，DPI 缩放时不裁掉操作入口。
     -->
     <Grid Margin="12">
         <Grid.ColumnDefinitions>
@@ -160,17 +163,22 @@
 
         <Grid Grid.Column="2">
             <Grid.RowDefinitions>
-                <RowDefinition Height="190" />
-                <RowDefinition Height="165" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
-                <RowDefinition Height="180" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- 基础控制区 -->
+            <!-- 基础控制区：低频工程调试功能默认折叠，首屏空间留给业务控制与关键数据。 -->
             <Border Grid.Row="0" Style="{StaticResource CardStyle}">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                <StackPanel>
-                    <TextBlock Text="基础控制 / Modbus 原始读写" Style="{StaticResource SectionTitleStyle}" />
+                <Expander IsExpanded="False">
+                    <Expander.Header>
+                        <TextBlock Text="基础控制 / Modbus 原始读写（工程调试）"
+                                   Style="{StaticResource SectionTitleStyle}" Margin="0" />
+                    </Expander.Header>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                                  Margin="0,6,0,0">
+                    <StackPanel>
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="1.15*" />
@@ -218,6 +226,7 @@
                              MinHeight="48" MaxHeight="72" FontFamily="Consolas" />
                 </StackPanel>
                 </ScrollViewer>
+                </Expander>
             </Border>
 
             <!-- 按钮 / 参数值区 -->
@@ -265,6 +274,9 @@
                                 Style="{StaticResource DangerButtonStyle}" />
                         <Button Content="清除异常" Command="{Binding ClearFaultCommand}"
                                 Style="{StaticResource DangerButtonStyle}" />
+                        <Button Content="重置本地任务" Command="{Binding ResetLocalTaskStateCommand}"
+                                Style="{StaticResource DangerButtonStyle}"
+                                ToolTip="车辆被外部复位或命令结果未知后，仅清除上位机记录；不会向车辆写任何数据。" />
                     </WrapPanel>
 
                     <WrapPanel>
@@ -400,7 +412,20 @@
                                 <TextBlock Text="报警" Style="{StaticResource FieldLabelStyle}" Margin="0,6,0,5" />
                                 <TextBlock Text="{Binding Snapshot.AlarmText}" Style="{StaticResource ValueTextStyle}"
                                            Foreground="{StaticResource DangerBrush}" Margin="0,0,0,6" />
-                                <ItemsControl ItemsSource="{Binding Snapshot.Alarms}">
+                                <TextBlock Text="无活动故障" Foreground="#1E7B34" FontWeight="SemiBold" Margin="0,0,0,6">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding HasActiveAlarm}" Value="False">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <ItemsControl ItemsSource="{Binding ActiveAlarms}"
+                                              Visibility="{Binding HasActiveAlarm, Converter={StaticResource BoolToVisibility}}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <Border Background="#FFF8F8" BorderBrush="#F0D6D6" BorderThickness="1"
@@ -433,15 +458,30 @@
                         </Grid.RowDefinitions>
                         <StackPanel Grid.Row="0">
                             <TextBlock Text="数据表" Style="{StaticResource SectionTitleStyle}" />
+                            <WrapPanel Margin="0,0,0,8">
+                                <TextBlock Text="筛选：" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" />
+                                <TextBox Width="150" Margin="6,0,10,0" VerticalContentAlignment="Center"
+                                         ToolTip="按字段名、DB 偏移或 Modbus 地址过滤"
+                                         Text="{Binding FieldFilterText, UpdateSourceTrigger=PropertyChanged}" />
+                                <ComboBox Width="120" Margin="0,0,10,0"
+                                          ItemsSource="{Binding FieldAreaFilters}"
+                                          SelectedItem="{Binding SelectedFieldArea}" />
+                                <CheckBox Content="仅看非零" IsChecked="{Binding OnlyNonZeroFields}"
+                                          VerticalAlignment="Center" Margin="0,0,10,0" />
+                                <CheckBox Content="隐藏备用" IsChecked="{Binding HideReservedFields}"
+                                          VerticalAlignment="Center" Margin="0,0,10,0" />
+                                <TextBlock VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}"
+                                           Text="{Binding FilteredFields.Count, StringFormat=共 {0} 项}" />
+                            </WrapPanel>
                             <TextBlock Text="字段地址来自 ProtocolMap 联调映射；与实车对接前需按最终协议替换。"
-                                       Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,8"
+                                       Foreground="{StaticResource MutedBrush}" FontSize="11"
                                        TextWrapping="Wrap" />
                         </StackPanel>
                         <!--
                             数据表可能包含上百条协议字段。
                             显式启用行列虚拟化和容器回收，避免缩放或轮询刷新时创建大量无效可视元素。
                         -->
-                        <DataGrid Grid.Row="1" ItemsSource="{Binding Snapshot.Fields}"
+                        <DataGrid Grid.Row="1" ItemsSource="{Binding FilteredFields}"
                                   AlternationCount="2" IsReadOnly="True" AutoGenerateColumns="False"
                                   EnableRowVirtualization="True" EnableColumnVirtualization="True"
                                   VirtualizingPanel.VirtualizationMode="Recycling"
@@ -463,8 +503,8 @@
                 </Border>
             </Grid>
 
-            <!-- 日志区 -->
-            <Border Grid.Row="3" Style="{StaticResource CardStyle}">
+            <!-- 日志区：Auto 行 + 上下限，窗口缩放时优先保证主内容区，不被固定像素裁切。 -->
+            <Border Grid.Row="3" Style="{StaticResource CardStyle}" MinHeight="140" MaxHeight="240">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -474,16 +514,24 @@
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <TextBlock Text="日志 / 操作记录" Style="{StaticResource SectionTitleStyle}" Margin="0" />
                             <TextBlock Text="界面缓存" Foreground="{StaticResource MutedBrush}" Margin="12,0,3,0" />
-                            <TextBlock Text="{Binding Logs.Count}" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding FilteredLogs.Count}" FontWeight="SemiBold" />
                             <TextBlock Text="条" Foreground="{StaticResource MutedBrush}" Margin="3,0,0,0" />
                             <TextBlock Text="文件日志：%LocalAppData%\ShuttleCarController\Logs"
                                        Foreground="{StaticResource MutedBrush}" Margin="16,0,0,0" />
                         </StackPanel>
-                        <Button HorizontalAlignment="Right" Content="清空视图"
-                                Command="{Binding ClearLogViewCommand}" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <TextBlock Text="级别" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"
+                                       Margin="0,0,6,0" />
+                            <ComboBox Width="118" Margin="0,0,10,0"
+                                      ItemsSource="{Binding LogLevelFilters}"
+                                      SelectedItem="{Binding SelectedLogLevelFilter}" />
+                            <CheckBox Content="暂停滚动" IsChecked="{Binding IsLogAutoScrollPaused}"
+                                      VerticalAlignment="Center" Margin="0,0,10,0" />
+                            <Button Content="清空视图" Command="{Binding ClearLogViewCommand}" />
+                        </StackPanel>
                     </Grid>
                     <!-- 日志界面最多 1000 条；虚拟化只创建当前可见行，清空视图不会删除文件日志。 -->
-                    <DataGrid Grid.Row="1" ItemsSource="{Binding Logs}" IsReadOnly="True"
+                    <DataGrid Grid.Row="1" x:Name="LogDataGrid" ItemsSource="{Binding FilteredLogs}" IsReadOnly="True"
                               AutoGenerateColumns="False" AlternationCount="2"
                               EnableRowVirtualization="True" EnableColumnVirtualization="True"
                               VirtualizingPanel.VirtualizationMode="Recycling"

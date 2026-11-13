@@ -20,6 +20,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private string _unitIdText = "1";
     private string _batteryInput = "100";
     private string _alarmInput = "0";
+    private string _inputError = string.Empty;
 
     public MainViewModel(ModbusSlaveSimulator simulator)
     {
@@ -82,13 +83,41 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public string StartStopText => CurrentStatus.Running ? "停止服务" : "启动服务";
 
+    /// <summary>
+    /// 启停操作最近的输入错误。
+    /// 非法端口/站号或端口占用时在这里给出明确提示，不再静默失败；
+    /// 成功启动或停止服务后自动清空。
+    /// </summary>
+    public string InputError
+    {
+        get => _inputError;
+        private set
+        {
+            if (_inputError == value)
+            {
+                return;
+            }
+
+            _inputError = value;
+            OnPropertyChanged();
+        }
+    }
+
     public ObservableCollection<FaultItem> FaultItems { get; } = new();
     public ObservableCollection<RegisterRow> Registers { get; } = new();
 
     /// <summary>从仿真器读取一次最新状态并刷新所有绑定。</summary>
     public void Refresh()
     {
-        CurrentStatus = _simulator.Status;
+        var next = _simulator.Status;
+
+        // 寄存器内容和运行状态都没变时，不替换状态对象，避免整窗绑定每 300 ms 重新求值。
+        if (StatusEquals(_status, next))
+        {
+            return;
+        }
+
+        CurrentStatus = next;
 
         for (var i = 0; i < Registers.Count && i < CurrentStatus.Registers.Count; i++)
         {
@@ -103,33 +132,78 @@ public sealed class MainViewModel : INotifyPropertyChanged
         OnPropertyChanged(nameof(StartStopText));
     }
 
+    /// <summary>逐项比较快照；寄存器列表按内容比较，而不是按列表引用。</summary>
+    private static bool StatusEquals(SimulatorStatus left, SimulatorStatus right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left.Running != right.Running
+            || left.Port != right.Port
+            || left.UnitId != right.UnitId
+            || left.CarState != right.CarState
+            || left.TaskNumber != right.TaskNumber
+            || left.TaskCompleted != right.TaskCompleted
+            || left.AlarmCode != right.AlarmCode
+            || left.Battery != right.Battery
+            || left.Position != right.Position
+            || left.Layer != right.Layer
+            || left.Column != right.Column
+            || left.Row != right.Row
+            || left.Aisle != right.Aisle
+            || left.AtSideA != right.AtSideA
+            || left.AtSideB != right.AtSideB
+            || left.HasGoods != right.HasGoods
+            || left.NoGoods != right.NoGoods
+            || !string.Equals(left.Message, right.Message, StringComparison.Ordinal)
+            || left.Registers.Count != right.Registers.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Registers.Count; i++)
+        {
+            if (left.Registers[i] != right.Registers[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     public async Task ToggleServiceAsync()
     {
         if (CurrentStatus.Running)
         {
             await _simulator.StopAsync().ConfigureAwait(false);
+            InputError = string.Empty;
+            return;
         }
-        else
+
+        if (!int.TryParse(PortText.Trim(), out var port) || port is <= 0 or > 65535)
         {
-            if (!int.TryParse(PortText, out var port) || port is <= 0 or > 65535)
-            {
-                // 非法端口时保持界面状态不变；真实使用应给出提示。
-                return;
-            }
+            InputError = "端口无效：请输入 1～65535 之间的整数。";
+            return;
+        }
 
-            if (!byte.TryParse(UnitIdText, out var unitId) || unitId == 0)
-            {
-                return;
-            }
+        if (!byte.TryParse(UnitIdText.Trim(), out var unitId) || unitId == 0)
+        {
+            InputError = "站号无效：请输入 1～255 之间的整数。";
+            return;
+        }
 
-            try
-            {
-                await _simulator.StartAsync(port, unitId).ConfigureAwait(false);
-            }
-            catch
-            {
-                // 错误已写入 LastError，下一次 Refresh 会显示。
-            }
+        try
+        {
+            await _simulator.StartAsync(port, unitId).ConfigureAwait(false);
+            InputError = string.Empty;
+        }
+        catch (Exception exception)
+        {
+            // 端口占用、权限不足等启动错误在这里立即反馈，不再只依赖下一次状态刷新。
+            InputError = $"启动失败：{exception.Message}";
         }
     }
 

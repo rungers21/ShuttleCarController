@@ -22,10 +22,21 @@ public sealed class AppConfigStore
 
     /// <summary>初始化当前用户专属的配置目录。</summary>
     public AppConfigStore()
-    {
-        _configDirectory = Path.Combine(
+        : this(Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "ShuttleCarController");
+            "ShuttleCarController"))
+    {
+    }
+
+    /// <summary>
+    /// 使用指定目录初始化配置存储。
+    /// 供单元测试注入临时目录，避免读写当前用户的真实配置。
+    /// </summary>
+    /// <param name="configDirectory">存放 config.json 的目录。</param>
+    public AppConfigStore(string configDirectory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(configDirectory);
+        _configDirectory = configDirectory;
     }
 
     /// <summary>主配置文件 config.json 的完整路径。</summary>

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using ShuttleCarController.Models;
+using ShuttleCarController.Services.Devices;
 
 namespace ShuttleCarController.Services;
 
@@ -118,6 +119,18 @@ public static class ProtocolMap
     /// <summary>出入库状态位（字节 10～11）。</summary>
     public const int InteractionTaskStateRegister = InteractionOffset + 5;
 
+    /// <summary>命令区镜像 FILO Bool@0.2 的位序号。</summary>
+    public const int InteractionFiloBit = 2;
+
+    /// <summary>命令区镜像 FIFO Bool@0.3 的位序号。</summary>
+    public const int InteractionFifoBit = 3;
+
+    /// <summary>状态回读 FIFO状态 Bool@1.2 的位序号。</summary>
+    public const int InteractionFifoStateBit = 10;
+
+    /// <summary>状态回读 FILO状态 Bool@1.3 的位序号。</summary>
+    public const int InteractionFiloStateBit = 11;
+
     /// <summary>上方有货 Bool@3.7 的位序号。</summary>
     public const int HasGoodsBit = 15;
 
@@ -145,13 +158,20 @@ public static class ProtocolMap
     private const string InteractionArea = "上位机交互";
 
     /// <summary>
+    /// 向后兼容门面：默认二向穿梭车画像的解码入口。
+    /// 新设备应直接依赖 <see cref="IDeviceProtocolProfile"/>，不要扩展这里的静态映射。
+    /// </summary>
+    public static ShuttleCarSnapshot Decode(IReadOnlyList<ushort> block, int baseAddress, DateTimeOffset updatedAt)
+        => TwoWayShuttleProtocolProfile.Instance.Decode(block, baseAddress, updatedAt);
+
+    /// <summary>
     /// 把一次完整轮询块解析成车辆快照。
     /// 状态区不足 20 个寄存器时返回 Error；交互区缺失时只跳过对应字段。
     /// </summary>
     /// <param name="block">从 <paramref name="baseAddress"/> 开始读取的原始寄存器。</param>
     /// <param name="baseAddress">轮询起始地址，用于在数据表中显示真实 Modbus 地址。</param>
     /// <param name="updatedAt">本批数据成功读取的时间。</param>
-    public static ShuttleCarSnapshot Decode(IReadOnlyList<ushort> block, int baseAddress, DateTimeOffset updatedAt)
+    internal static ShuttleCarSnapshot DecodeCore(IReadOnlyList<ushort> block, int baseAddress, DateTimeOffset updatedAt)
     {
         if (block.Count < StatusLength)
         {
@@ -171,7 +191,14 @@ public static class ProtocolMap
         var taskNumber = ProtocolCodec.ToInt32(Word(StatusTaskNumberRegister), Word(StatusTaskNumberRegister + 1));
         var interactionAvailable = Has(InteractionTaskStateRegister);
 
-        var alarms = new List<ShuttleCarAlarm>();
+        var taskCompletedFlag = Flag(StatusFlagsRegister, StatusTaskCompletedBit);
+        var atSideA = Flag(StatusFlagsRegister, StatusAtSideABit);
+        var atSideB = Flag(StatusFlagsRegister, StatusAtSideBBit);
+        var hasGoods = interactionAvailable && Flag(InteractionFaultRegister, HasGoodsBit);
+        var noGoods = interactionAvailable && Flag(InteractionCargoRegister, NoGoodsBit);
+
+        // 冲突项保留在固定故障明细之外单独追加，避免把“正常”干扰项混进报警列表。
+        var alarms = new List<ShuttleCarAlarm>(FaultFields.Count + 3);
         if (interactionAvailable)
         {
             foreach (var field in FaultFields)
@@ -181,7 +208,36 @@ public static class ProtocolMap
                     continue;
                 }
 
-                alarms.Add(new ShuttleCarAlarm(field.Name, Flag(field.RegisterOffset, field.BitIndex)));
+                // Excel 原表标注“未写入”的位仍然解码，但必须明确说明其来源限制。
+                alarms.Add(new ShuttleCarAlarm(
+                    field.Name,
+                    Flag(field.RegisterOffset, field.BitIndex),
+                    field.Unwritten ? "未写入" : null));
+            }
+
+            if (atSideA && atSideB)
+            {
+                alarms.Add(new ShuttleCarAlarm("方向状态冲突", true, "在A侧与在B侧同时为真"));
+            }
+
+            if (hasGoods && noGoods)
+            {
+                alarms.Add(new ShuttleCarAlarm("货物状态冲突", true, "上方有货与上方无货同时为真"));
+            }
+
+            var fifo = Flag(InteractionRunStateRegister, InteractionFifoBit);
+            var filo = Flag(InteractionRunStateRegister, InteractionFiloBit);
+            var fifoState = Flag(InteractionRunStateRegister, InteractionFifoStateBit);
+            var filoState = Flag(InteractionRunStateRegister, InteractionFiloStateBit);
+            if ((fifo && filo)
+                || (fifoState && filoState)
+                || (fifo && filoState)
+                || (filo && fifoState))
+            {
+                alarms.Add(new ShuttleCarAlarm(
+                    "出库方式状态冲突",
+                    true,
+                    $"FIFO={fifo}, FILO={filo}, FIFO状态={fifoState}, FILO状态={filoState}"));
             }
         }
 
@@ -211,13 +267,13 @@ public static class ProtocolMap
             CurrentColumn = Int16(StatusOffset + 16),
             CurrentRow = Int16(StatusOffset + 17),
             CurrentAisle = Int16(StatusOffset + 18),
-            TaskCompletedFlag = Flag(StatusFlagsRegister, StatusTaskCompletedBit),
-            AtSideA = Flag(StatusFlagsRegister, StatusAtSideABit),
-            AtSideB = Flag(StatusFlagsRegister, StatusAtSideBBit),
+            TaskCompletedFlag = taskCompletedFlag,
+            AtSideA = atSideA,
+            AtSideB = atSideB,
             InboundPending = interactionAvailable && Flag(InteractionTaskStateRegister, InboundPendingBit),
             OutboundPending = interactionAvailable && Flag(InteractionTaskStateRegister, OutboundPendingBit),
-            HasGoods = interactionAvailable && Flag(InteractionFaultRegister, HasGoodsBit),
-            NoGoods = interactionAvailable && Flag(InteractionCargoRegister, NoGoodsBit),
+            HasGoods = hasGoods,
+            NoGoods = noGoods,
             Alarms = alarms,
             Fields = BuildFieldValues(block, baseAddress, updatedAt)
         };
@@ -297,7 +353,7 @@ public static class ProtocolMap
 
             rows.Add(new ShuttleCarFieldValue(
                 field.Area,
-                field.Name,
+                field.Unwritten ? $"{field.Name}（未写入）" : field.Name,
                 field.DbOffset,
                 field.BitIndex >= 0
                     ? $"{baseAddress + field.RegisterOffset}.{field.BitIndex}"
@@ -383,8 +439,8 @@ public static class ProtocolMap
             new(InteractionArea, "正常", "1.7", InteractionRunStateRegister, "Bool", 15),
 
             // 字节 2～3：故障、货物和方向
-            new(InteractionArea, "前防撞保护", "2.0", InteractionFaultRegister, "Bool", 0),
-            new(InteractionArea, "后防撞保护", "2.1", InteractionFaultRegister, "Bool", 1),
+            new(InteractionArea, "前防撞保护", "2.0", InteractionFaultRegister, "Bool", 0, Unwritten: true),
+            new(InteractionArea, "后防撞保护", "2.1", InteractionFaultRegister, "Bool", 1, Unwritten: true),
             new(InteractionArea, "顶升超时", "2.2", InteractionFaultRegister, "Bool", 2),
             new(InteractionArea, "行走超时", "2.3", InteractionFaultRegister, "Bool", 3),
             new(InteractionArea, "前减速故障", "2.4", InteractionFaultRegister, "Bool", 4),
@@ -392,7 +448,7 @@ public static class ProtocolMap
             new(InteractionArea, "前向上故障", "2.6", InteractionFaultRegister, "Bool", 6),
             new(InteractionArea, "后向上故障", "2.7", InteractionFaultRegister, "Bool", 7),
             new(InteractionArea, "接近开关故障", "3.0", InteractionFaultRegister, "Bool", 8),
-            new(InteractionArea, "行走堵转故障", "3.1", InteractionFaultRegister, "Bool", 9),
+            new(InteractionArea, "行走堵转故障", "3.1", InteractionFaultRegister, "Bool", 9, Unwritten: true),
             new(InteractionArea, "A侧急停故障", "3.2", InteractionFaultRegister, "Bool", 10),
             new(InteractionArea, "B侧急停故障", "3.3", InteractionFaultRegister, "Bool", 11),
             new(InteractionArea, "行走电机故障", "3.4", InteractionFaultRegister, "Bool", 12),
@@ -426,10 +482,15 @@ public static class ProtocolMap
 /// <param name="RegisterOffset">该字段在轮询块中的寄存器下标。</param>
 /// <param name="DataType">Int、DInt 或 Bool。</param>
 /// <param name="BitIndex">Bool 字段在寄存器中的位序号；非 Bool 为 -1。</param>
+/// <param name="Unwritten">
+/// Excel 原表是否标注该位“未写入”。为 true 时报警明细必须附带“未写入”说明，
+/// 但仿真从站仍可读写该位，便于联调时验证上位机的显示行为。
+/// </param>
 public sealed record ProtocolField(
     string Area,
     string Name,
     string DbOffset,
     int RegisterOffset,
     string DataType,
-    int BitIndex = -1);
+    int BitIndex = -1,
+    bool Unwritten = false);

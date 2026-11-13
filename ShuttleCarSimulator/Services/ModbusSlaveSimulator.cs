@@ -390,6 +390,17 @@ public sealed class ModbusSlaveSimulator : IAsyncDisposable
                 _manualTaskComplete = false;
                 _taskStartTime = null;
                 _lastPositionIncrement = null;
+
+                // 命令区同步复位：清空任务类型、任务号、入库后退等 9 个命令寄存器，
+                // 否则主站下一次下发相同任务号时会被误判为“没有新任务”。
+                for (var register = ProtocolMap.CommandTaskBlockRegister;
+                     register < ProtocolMap.CommandTaskBlockRegister + ProtocolMap.CommandTaskBlockLength;
+                     register++)
+                {
+                    _registers[register] = 0;
+                }
+
+                _acceptedTaskNumber = 0;
             }
 
             // 新任务：任务号变化即视为新任务，任务类型 0 也接受，便于界面用默认参数联调。

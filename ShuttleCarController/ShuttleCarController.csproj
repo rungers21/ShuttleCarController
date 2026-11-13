@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <!-- Windows 桌面 WPF 应用；启动入口和主窗口由 PrismApplication 管理。 -->
     <OutputType>WinExe</OutputType>
@@ -13,5 +13,9 @@
     <PackageReference Include="NModbus" Version="3.0.83" />
     <!-- Prism 提供 MVVM、DelegateCommand 和 DryIoc 依赖注入。 -->
     <PackageReference Include="Prism.DryIoc" Version="9.0.537" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 测试工程需要构造带确认回调的 ViewModel，验证联锁而不弹出 MessageBox。 -->
+    <InternalsVisibleTo Include="ShuttleCarController.Tests" />
   </ItemGroup>
 </Project>

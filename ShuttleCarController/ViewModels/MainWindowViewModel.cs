@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
@@ -73,6 +73,18 @@ public sealed class MainWindowViewModel : BindableBase, IDisposable
     private ShuttleCarSnapshot? _pendingSnapshot;
     private int _snapshotDispatchScheduled;
 
+    // 高风险操作确认入口。默认弹 MessageBox；测试通过 internal 构造函数注入替代实现。
+    private readonly Func<string, bool> _confirm;
+
+    // 数据表/日志筛选：只影响界面投影，不改变协议解码和磁盘日志。
+    private string _fieldFilterText = string.Empty;
+    private string _selectedFieldArea = "全部";
+    private bool _onlyNonZeroFields;
+    private bool _hideReservedFields;
+    private string _selectedLogLevelFilter = "全部";
+    private bool _isLogAutoScrollPaused;
+    private IReadOnlyList<ShuttleCarFieldValue> _filteredFields = [];
+
     // 定时器刷新去重缓存，避免每秒钟重复发起相同的属性通知。
     private string _lastDataAgeText = string.Empty;
     private bool _lastDataIsFresh;
@@ -90,10 +102,24 @@ public sealed class MainWindowViewModel : BindableBase, IDisposable
         AppConfigStore configStore,
         ILogService logService,
         IShuttleCarClient? shuttleCarClient = null)
+        : this(configStore, logService, shuttleCarClient, null)
+    {
+    }
+
+    /// <summary>
+    /// 测试可注入确认回调的构造函数。
+    /// 生产代码始终走公开构造函数（MessageBox 二次确认），该重载仅供测试替换交互。
+    /// </summary>
+    internal MainWindowViewModel(
+        AppConfigStore configStore,
+        ILogService logService,
+        IShuttleCarClient? shuttleCarClient,
+        Func<string, bool>? confirm)
     {
         _configStore = configStore;
         _logService = logService;
         _shuttleCarClient = shuttleCarClient;
+        _confirm = confirm ?? ConfirmWithMessageBox;
 
         // 配置损坏时 Store 会返回默认值和警告，不让配置问题阻止窗口启动。
         var configResult = configStore.Load();
@@ -130,6 +156,7 @@ public sealed class MainWindowViewModel : BindableBase, IDisposable
             CanExecuteMaintenanceCommand);
         ConfirmCompleteCommand = new DelegateCommand(async () => await ConfirmCompleteAsync(), CanConfirmComplete);
         ClearFaultCommand = new DelegateCommand(async () => await ClearFaultAsync(), CanClearFault);
+        ResetLocalTaskStateCommand = new DelegateCommand(ResetLocalTaskState, CanResetLocalTaskState);
         ClearLogViewCommand = new DelegateCommand(ClearLogView);
 
         // 先订阅日志再记录初始化信息，确保“通信未接入”等启动提示能出现在界面。
@@ -208,8 +235,166 @@ public sealed class MainWindowViewModel : BindableBase, IDisposable
     /// <summary>请求清除可恢复故障，不替代现场安全处理。</summary>
     public DelegateCommand ClearFaultCommand { get; }
 
+    /// <summary>
+    /// 人工重置本地任务状态。
+    /// 仅在本机仍记录着活动任务号时开放，用于车辆外部复位、切换连接或命令结果未知后解除联锁；
+    /// 该命令只清除上位机记录，绝不向车辆写入任何数据。
+    /// </summary>
+    public DelegateCommand ResetLocalTaskStateCommand { get; }
+
     /// <summary>只清空界面日志视图，不删除已经写入磁盘的日志文件。</summary>
     public DelegateCommand ClearLogViewCommand { get; }
+
+    /// <summary>数据表区域筛选项；“全部”不做区域过滤。</summary>
+    public IReadOnlyList<string> FieldAreaFilters { get; } = ["全部", "车辆→上位机", "上位机→车辆", "上位机交互"];
+
+    /// <summary>数据表关键字，匹配字段名、DB 偏移和 Modbus 地址。</summary>
+    public string FieldFilterText
+    {
+        get => _fieldFilterText;
+        set
+        {
+            if (Set(ref _fieldFilterText, value ?? string.Empty))
+            {
+                RefreshFilteredFields();
+            }
+        }
+    }
+
+    /// <summary>数据表区域筛选。</summary>
+    public string SelectedFieldArea
+    {
+        get => _selectedFieldArea;
+        set
+        {
+            if (Set(ref _selectedFieldArea, value ?? "全部"))
+            {
+                RefreshFilteredFields();
+            }
+        }
+    }
+
+    /// <summary>仅显示原始值非零的字段，默认关闭以保留完整协议视图。</summary>
+    public bool OnlyNonZeroFields
+    {
+        get => _onlyNonZeroFields;
+        set
+        {
+            if (Set(ref _onlyNonZeroFields, value))
+            {
+                RefreshFilteredFields();
+            }
+        }
+    }
+
+    /// <summary>隐藏名称含“备用/保留”的占位字段。</summary>
+    public bool HideReservedFields
+    {
+        get => _hideReservedFields;
+        set
+        {
+            if (Set(ref _hideReservedFields, value))
+            {
+                RefreshFilteredFields();
+            }
+        }
+    }
+
+    /// <summary>经过关键字、区域和“非零/备用”筛选后的数据表投影。</summary>
+    public IReadOnlyList<ShuttleCarFieldValue> FilteredFields => _filteredFields;
+
+    /// <summary>当前活动故障明细；无报警时为空，界面不再渲染 15 条“正常”项。</summary>
+    public IReadOnlyList<ShuttleCarAlarm> ActiveAlarms =>
+        Snapshot.Alarms.Where(alarm => alarm.IsActive).ToArray();
+
+    /// <summary>是否存在活动报警，供界面切换“无故障”摘要和故障明细列表。</summary>
+    public bool HasActiveAlarm => Snapshot.HasAlarm;
+
+    /// <summary>日志级别筛选项。</summary>
+    public IReadOnlyList<string> LogLevelFilters { get; } = ["全部", "仅警告与错误", "仅错误"];
+
+    /// <summary>日志级别筛选；只影响界面视图，不删除磁盘日志。</summary>
+    public string SelectedLogLevelFilter
+    {
+        get => _selectedLogLevelFilter;
+        set
+        {
+            if (Set(ref _selectedLogLevelFilter, value ?? "全部"))
+            {
+                RebuildFilteredLogs();
+            }
+        }
+    }
+
+    /// <summary>暂停自动滚动到最新日志，便于查看历史记录。</summary>
+    public bool IsLogAutoScrollPaused
+    {
+        get => _isLogAutoScrollPaused;
+        set => Set(ref _isLogAutoScrollPaused, value);
+    }
+
+    /// <summary>经过级别筛选后的日志视图；与 <see cref="Logs"/> 同步增删。</summary>
+    public ObservableCollection<LogEntry> FilteredLogs { get; } = [];
+
+    /// <summary>按当前条件重建数据表投影；快照变化或筛选条件变化时调用。</summary>
+    private void RefreshFilteredFields()
+    {
+        IEnumerable<ShuttleCarFieldValue> query = Snapshot.Fields;
+
+        if (!string.Equals(SelectedFieldArea, "全部", StringComparison.Ordinal))
+        {
+            query = query.Where(row => string.Equals(row.Area, SelectedFieldArea, StringComparison.Ordinal));
+        }
+
+        var keyword = FieldFilterText.Trim();
+        if (keyword.Length > 0)
+        {
+            query = query.Where(row =>
+                row.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+                || row.DbOffset.Contains(keyword, StringComparison.OrdinalIgnoreCase)
+                || row.ModbusAddress.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (OnlyNonZeroFields)
+        {
+            query = query.Where(row => !IsZeroRawValue(row.RawValue));
+        }
+
+        if (HideReservedFields)
+        {
+            query = query.Where(row =>
+                !row.Name.Contains("备用", StringComparison.Ordinal)
+                && !row.Name.Contains("保留", StringComparison.Ordinal));
+        }
+
+        _filteredFields = query.ToArray();
+        RaisePropertyChanged(nameof(FilteredFields));
+    }
+
+    private static bool IsZeroRawValue(string rawValue)
+    {
+        return rawValue is "0" or "0x0000" or "0x0000 0x0000";
+    }
+
+    /// <summary>按当前级别筛选重建日志视图，只处理界面缓存的 1000 条记录。</summary>
+    private void RebuildFilteredLogs()
+    {
+        FilteredLogs.Clear();
+        foreach (var entry in Logs.Where(MatchesLogFilter))
+        {
+            FilteredLogs.Add(entry);
+        }
+    }
+
+    private bool MatchesLogFilter(LogEntry entry)
+    {
+        return SelectedLogLevelFilter switch
+        {
+            "仅警告与错误" => entry.Level >= LogLevel.Warning,
+            "仅错误" => entry.Level == LogLevel.Error,
+            _ => true
+        };
+    }
 
     /// <summary>是否已注入实际通信实现；为 false 时连接和所有硬件命令均不可用。</summary>
     public bool IsClientAvailable => _shuttleCarClient is not null;
@@ -312,6 +497,9 @@ public sealed class MainWindowViewModel : BindableBase, IDisposable
             _lastDataAgeText = DataAgeText;
             RaisePropertyChanged(nameof(DataIsFresh));
             RaisePropertyChanged(nameof(DataAgeText));
+            RaisePropertyChanged(nameof(ActiveAlarms));
+            RaisePropertyChanged(nameof(HasActiveAlarm));
+            RefreshFilteredFields();
             RefreshCommandStates();
         }
     }
@@ -519,6 +707,15 @@ public sealed class MainWindowViewModel : BindableBase, IDisposable
     private bool CanClearFault()
     {
         return CanUseConnectedClient() && DataIsFresh && Snapshot.HasAlarm;
+    }
+
+    /// <summary>
+    /// 本地任务重置只依赖本机记录，不要求链路在线：
+    /// 断线、换站号或车辆被外部复位后，正是最需要解除本机锁死的场景。
+    /// </summary>
+    private bool CanResetLocalTaskState()
+    {
+        return !IsBusy && ActiveTaskNumber is not null;
     }
 
     /// <summary>
@@ -837,6 +1034,33 @@ public sealed class MainWindowViewModel : BindableBase, IDisposable
     }
 
     /// <summary>
+    /// 人工重置本地任务状态。
+    /// 只清除本机 ActiveTaskNumber 记录并生成新任务号，不发送任何车辆命令，
+    /// 因此必须二次确认并记录警告日志，避免把“清除界面状态”误解为“车辆已复位”。
+    /// </summary>
+    private void ResetLocalTaskState()
+    {
+        if (ActiveTaskNumber is not { } previous)
+        {
+            return;
+        }
+
+        if (!Confirm($"确认重置本地任务状态？{Environment.NewLine}当前活动任务号：{previous}{Environment.NewLine}本操作只清除上位机记录，不会向车辆发送命令。{Environment.NewLine}请先核对车辆实际状态。"))
+        {
+            return;
+        }
+
+        ActiveTaskNumber = null;
+        TaskNumberInput = GenerateTaskNumber();
+        CommandPhase = "本地任务状态已人工重置，请核对车辆状态";
+        StatusMessage = $"已清除本地任务 {previous} 的记录（未发送车辆命令）。";
+        _logService.Warning(
+            LogCategory.Command,
+            "人工重置本地任务状态。",
+            $"任务号 {previous} 的本地记录已清除；未向车辆发送任何命令。");
+    }
+
+    /// <summary>
     /// 执行初始化和盘点清零等维护命令的共用流程。
     /// 两条命令都必须二次确认，并复用统一的忙碌锁、结果处理和日志记录。
     /// </summary>
@@ -1103,9 +1327,19 @@ public sealed class MainWindowViewModel : BindableBase, IDisposable
         OnUiThread(() =>
         {
             Logs.Add(entry);
+            if (MatchesLogFilter(entry))
+            {
+                FilteredLogs.Add(entry);
+            }
+
             while (Logs.Count > MaxDisplayLogEntries)
             {
+                var removed = Logs[0];
                 Logs.RemoveAt(0);
+                if (FilteredLogs.Count > 0 && ReferenceEquals(FilteredLogs[0], removed))
+                {
+                    FilteredLogs.RemoveAt(0);
+                }
             }
         });
     }
@@ -1136,6 +1370,7 @@ public sealed class MainWindowViewModel : BindableBase, IDisposable
     private void ClearLogView()
     {
         Logs.Clear();
+        FilteredLogs.Clear();
     }
 
     /// <summary>
@@ -1153,13 +1388,20 @@ public sealed class MainWindowViewModel : BindableBase, IDisposable
         InitializeCommand?.RaiseCanExecuteChanged();
         ConfirmCompleteCommand?.RaiseCanExecuteChanged();
         ClearFaultCommand?.RaiseCanExecuteChanged();
+        ResetLocalTaskStateCommand?.RaiseCanExecuteChanged();
     }
 
     /// <summary>
     /// 显示高风险操作确认框。
     /// 默认按钮为“否”，关闭对话框或误按回车都不会执行写入或车辆动作。
     /// </summary>
-    private static bool Confirm(string message)
+    private bool Confirm(string message)
+    {
+        return _confirm(message);
+    }
+
+    /// <summary>生产环境的确认实现：使用当前主窗口作为 MessageBox 的 owner。</summary>
+    private static bool ConfirmWithMessageBox(string message)
     {
         var owner = Application.Current?.MainWindow;
         if (owner is null)

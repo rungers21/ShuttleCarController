@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using NModbus;
 using ShuttleCarController.Models;
+using ShuttleCarController.Services.Devices;
 
 namespace ShuttleCarController.Services;
 
@@ -18,7 +19,8 @@ namespace ShuttleCarController.Services;
 /// <remarks>
 /// 所有 NModbus 调用都通过同步 API 在后台线程执行，并由同一个 <see cref="SemaphoreSlim"/> 串行化，
 /// 避免 NModbus 异步实现的内部调度问题和并发占用同一连接。
-/// 轮询块和业务命令都按 <see cref="ProtocolMap"/> 的联调映射解析；该映射不是已确认的现场协议。
+/// 轮询解码、命令编码和握手判定全部委托给注入的 <see cref="IDeviceProtocolProfile"/>；
+/// 默认画像为联调用的二向穿梭车映射，该映射不是已确认的现场协议。
 /// </remarks>
 public sealed class ModbusShuttleCarClient : IShuttleCarClient
 {
@@ -45,11 +47,25 @@ public sealed class ModbusShuttleCarClient : IShuttleCarClient
     // 最近一次成功快照：读取失败时保留数值，只降低数据质量。
     private ShuttleCarSnapshot _lastSnapshot = ShuttleCarSnapshot.Empty;
 
-    /// <summary>创建 Modbus TCP 客户端，日志用于记录连接、重连和轮询异常。</summary>
-    public ModbusShuttleCarClient(ILogService logService)
+    // 协议画像：轮询解码、命令编码与握手判定都由注入的实现决定。
+    private readonly IDeviceProtocolProfile _profile;
+
+    // 帧缓存：寄存器内容未变化时复用已解码的字段/报警集合，减少轮询热路径分配。
+    private readonly StatusSnapshotCache _snapshotCache;
+
+    /// <summary>
+    /// 创建 Modbus TCP 客户端，日志用于记录连接、重连和轮询异常；
+    /// 协议画像决定寄存器布局、命令编码与握手判定。
+    /// </summary>
+    public ModbusShuttleCarClient(ILogService logService, IDeviceProtocolProfile profile)
     {
         _logService = logService;
+        _profile = profile ?? throw new ArgumentNullException(nameof(profile));
+        _snapshotCache = new StatusSnapshotCache(_profile);
     }
+
+    /// <summary>当前协议画像，供测试与诊断确认实际使用的寄存器布局。</summary>
+    internal IDeviceProtocolProfile Profile => _profile;
 
     /// <inheritdoc />
     public ConnectionState State => _state;
@@ -94,6 +110,7 @@ public sealed class ModbusShuttleCarClient : IShuttleCarClient
             $"IP={_settings.IpAddress}, Port={_settings.Port}, UnitId={_settings.UnitId}");
 
         _pollCts = new CancellationTokenSource();
+        _snapshotCache.Reset();
         _pollTask = Task.Run(() => PollLoopAsync(_pollCts.Token), CancellationToken.None);
     }
 
@@ -215,7 +232,7 @@ public sealed class ModbusShuttleCarClient : IShuttleCarClient
 
     /// <inheritdoc />
     /// <remarks>
-    /// 按 <see cref="ProtocolMap"/> 的联调映射写入命令区；任务握手采用“写入—等待车辆回显”方式，
+    /// 命令编码由 <see cref="IDeviceProtocolProfile"/> 决定；任务握手采用“写入—等待车辆回显”方式，
     /// 等待超时返回 ResultUnknown，由操作人员核对实车，禁止自动重发。
     /// </remarks>
     public async Task<CommandResult> ExecuteCommandAsync(ShuttleCarCommand command, CancellationToken cancellationToken = default)
@@ -226,20 +243,55 @@ public sealed class ModbusShuttleCarClient : IShuttleCarClient
         }
 
         // 命令区与状态区共用同一基址；等待窗口按请求超时的 3 倍计算，低速链路也留有余量。
-        var baseAddress = Math.Clamp(_settings.PollStartAddress, 0, ushort.MaxValue - ProtocolMap.TotalLength);
+        var baseAddress = Math.Clamp(_settings.PollStartAddress, 0, ushort.MaxValue - _profile.TotalLength);
         var waitTimeout = TimeSpan.FromMilliseconds(Math.Max(1500, _settings.RequestTimeoutMs * 3));
+
+        if (command.Type is ShuttleCarCommandType.StartTask && command.TaskNumber is not > 0)
+        {
+            return new CommandResult(CommandStatus.Rejected, "下发任务必须提供大于 0 的任务号。");
+        }
+
+        if (command.Type is ShuttleCarCommandType.ConfirmComplete && command.TaskNumber is not > 0)
+        {
+            return new CommandResult(CommandStatus.Rejected, "完成确认必须携带任务号。");
+        }
+
+        // 命令编码完全由设备画像决定；这里不再出现任何具体寄存器偏移。
+        var steps = _profile.EncodeCommand(command, baseAddress);
+        if (steps.Count == 0)
+        {
+            return new CommandResult(CommandStatus.NotSupported, $"协议画像 {_profile.DisplayName} 不支持命令 {command.Type}。");
+        }
+
         try
         {
+            foreach (var step in steps)
+            {
+                await ExecuteStepAsync(step, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (!_profile.ShouldWaitForSatisfaction(command.Type))
+            {
+                var name = CommandDisplayName(command.Type);
+                return new CommandResult(CommandStatus.Accepted, $"{name}脉冲已发送，请以最新快照确认车辆状态。");
+            }
+
+            var satisfied = await WaitForSatisfactionAsync(command, waitTimeout, cancellationToken).ConfigureAwait(false);
             return command.Type switch
             {
-                ShuttleCarCommandType.StartTask => await StartTaskAsync(command, baseAddress, waitTimeout, cancellationToken).ConfigureAwait(false),
-                ShuttleCarCommandType.ConfirmComplete => await ConfirmCompleteAsync(command, baseAddress, waitTimeout, cancellationToken).ConfigureAwait(false),
-                ShuttleCarCommandType.InventoryReset => await PulseAsync(
-                    baseAddress + ProtocolMap.CommandInventoryResetRegister, "盘点清零", cancellationToken).ConfigureAwait(false),
-                ShuttleCarCommandType.Initialize => await PulseAsync(
-                    baseAddress + ProtocolMap.CommandInitializeRegister, "初始化", cancellationToken).ConfigureAwait(false),
-                ShuttleCarCommandType.ClearFault => await ClearFaultAsync(baseAddress, cancellationToken).ConfigureAwait(false),
-                _ => new CommandResult(CommandStatus.NotSupported, $"不支持命令 {command.Type}。")
+                ShuttleCarCommandType.StartTask => satisfied
+                    ? new CommandResult(CommandStatus.Accepted, $"车辆已接收任务 {command.TaskNumber}。", command.TaskNumber)
+                    : new CommandResult(
+                        CommandStatus.ResultUnknown,
+                        $"任务 {command.TaskNumber} 已下发，但未在 {waitTimeout.TotalMilliseconds:F0} ms 内确认接收，请核对车辆状态。",
+                        command.TaskNumber),
+                ShuttleCarCommandType.ConfirmComplete => satisfied
+                    ? new CommandResult(CommandStatus.Completed, $"车辆已确认任务 {command.TaskNumber} 完成。", command.TaskNumber)
+                    : new CommandResult(
+                        CommandStatus.ResultUnknown,
+                        $"完成确认已发送，但车辆未在 {waitTimeout.TotalMilliseconds:F0} ms 内清除任务 {command.TaskNumber}，请核对车辆状态。",
+                        command.TaskNumber),
+                _ => new CommandResult(CommandStatus.Accepted, "命令已发送，请以最新快照确认车辆状态。")
             };
         }
         catch (SlaveException exception)
@@ -256,117 +308,62 @@ public sealed class ModbusShuttleCarClient : IShuttleCarClient
         }
     }
 
-    /// <summary>写入任务参数区，并等待车辆在状态区回显同一任务号。</summary>
-    private async Task<CommandResult> StartTaskAsync(
-        ShuttleCarCommand command,
-        int baseAddress,
-        TimeSpan waitTimeout,
-        CancellationToken cancellationToken)
+    /// <summary>按协议画像编码的步骤执行写入；置位/复位走读—改—写，其余按数量选择 FC06/FC16。</summary>
+    private async Task ExecuteStepAsync(DeviceWriteStep step, CancellationToken cancellationToken)
     {
-        if (command.TaskNumber is not > 0)
+        if (step.SetFlagBit is { } setBit)
         {
-            return new CommandResult(CommandStatus.Rejected, "下发任务必须提供大于 0 的任务号。");
+            await SetFlagBitValueAsync(step.Address, setBit, true, cancellationToken).ConfigureAwait(false);
+        }
+        else if (step.ClearFlagBit is { } clearBit)
+        {
+            await SetFlagBitValueAsync(step.Address, clearBit, false, cancellationToken).ConfigureAwait(false);
+        }
+        else if (step.Values.Count == 1)
+        {
+            await WriteRegisterAsync(step.Address, step.Values[0], cancellationToken).ConfigureAwait(false);
+        }
+        else if (step.Values.Count > 1)
+        {
+            await WriteRegistersAsync(step.Address, step.Values.ToArray(), cancellationToken).ConfigureAwait(false);
         }
 
-        var taskNumber = command.TaskNumber.Value;
-        var values = new ushort[ProtocolMap.CommandTaskBlockLength];
-        values[0] = unchecked((ushort)(command.TaskType ?? 0));
-        values[2] = unchecked((ushort)(command.OutboundMode ?? 0));
-        values[3] = unchecked((ushort)(command.BodyDirection ?? 0));
-        values[6] = (ushort)(taskNumber >> 16);
-        values[7] = (ushort)(taskNumber & 0xFFFF);
-        values[8] = unchecked((ushort)(command.EntryBack ?? 0));
-
-        await WriteRegistersAsync(baseAddress + ProtocolMap.CommandTaskBlockRegister, values, cancellationToken).ConfigureAwait(false);
-
-        var accepted = await WaitForStatusAsync(
-            block => ReadTaskNumber(block) == taskNumber,
-            waitTimeout,
-            cancellationToken).ConfigureAwait(false);
-
-        return accepted
-            ? new CommandResult(CommandStatus.Accepted, $"车辆已接收任务 {taskNumber}。", taskNumber)
-            : new CommandResult(
-                CommandStatus.ResultUnknown,
-                $"任务 {taskNumber} 已下发，但未在 {waitTimeout.TotalMilliseconds:F0} ms 内确认接收，请核对车辆状态。",
-                taskNumber);
-    }
-
-    /// <summary>置位“确认完成”，并等待车辆清除任务号和完成位。</summary>
-    private async Task<CommandResult> ConfirmCompleteAsync(
-        ShuttleCarCommand command,
-        int baseAddress,
-        TimeSpan waitTimeout,
-        CancellationToken cancellationToken)
-    {
-        if (command.TaskNumber is not > 0)
+        if (step.DelayAfterMs > 0)
         {
-            return new CommandResult(CommandStatus.Rejected, "完成确认必须携带任务号。");
+            await Task.Delay(step.DelayAfterMs, cancellationToken).ConfigureAwait(false);
         }
-
-        var taskNumber = command.TaskNumber.Value;
-        await SetFlagBitAsync(baseAddress, ProtocolMap.ConfirmCompleteBit, true, cancellationToken).ConfigureAwait(false);
-
-        var cleared = await WaitForStatusAsync(
-            block => ReadTaskNumber(block) == 0 && !ProtocolMap.IsTaskCompleted(block),
-            waitTimeout,
-            cancellationToken).ConfigureAwait(false);
-
-        return cleared
-            ? new CommandResult(CommandStatus.Completed, $"车辆已确认任务 {taskNumber} 完成。", taskNumber)
-            : new CommandResult(
-                CommandStatus.ResultUnknown,
-                $"完成确认已发送，但车辆未在 {waitTimeout.TotalMilliseconds:F0} ms 内清除任务 {taskNumber}，请核对车辆状态。",
-                taskNumber);
-    }
-
-    /// <summary>置位后 200ms 复位的“清除异常”脉冲。</summary>
-    private async Task<CommandResult> ClearFaultAsync(int baseAddress, CancellationToken cancellationToken)
-    {
-        await SetFlagBitAsync(baseAddress, ProtocolMap.ClearFaultBit, true, cancellationToken).ConfigureAwait(false);
-        await Task.Delay(200, cancellationToken).ConfigureAwait(false);
-        await SetFlagBitAsync(baseAddress, ProtocolMap.ClearFaultBit, false, cancellationToken).ConfigureAwait(false);
-        return new CommandResult(CommandStatus.Accepted, "已发送清除异常脉冲，请以最新快照中的报警状态为准。");
-    }
-
-    /// <summary>写 1 后 200ms 写 0 的单次命令脉冲，用于盘点清零和初始化。</summary>
-    private async Task<CommandResult> PulseAsync(int register, string name, CancellationToken cancellationToken)
-    {
-        await WriteRegisterAsync(register, 1, cancellationToken).ConfigureAwait(false);
-        await Task.Delay(200, cancellationToken).ConfigureAwait(false);
-        await WriteRegisterAsync(register, 0, cancellationToken).ConfigureAwait(false);
-        return new CommandResult(CommandStatus.Accepted, $"{name}脉冲已发送，请以最新快照确认车辆状态。");
     }
 
     /// <summary>
-    /// 读—改—写命令标志位。
+    /// 读—改—写指定地址的标志位。
     /// shortcut: 依赖 PLC 不会并发修改同一字；实车必须按方案 7.2 的位复位方式确认后再使用。
     /// </summary>
-    private async Task SetFlagBitAsync(int baseAddress, int bit, bool value, CancellationToken cancellationToken)
+    private async Task SetFlagBitValueAsync(ushort address, int bit, bool value, CancellationToken cancellationToken)
     {
-        var address = baseAddress + ProtocolMap.CommandFlagsRegister;
         var current = await ExecuteAsync(
-            master => master.ReadHoldingRegisters(_settings.UnitId, (ushort)address, 1),
+            master => master.ReadHoldingRegisters(_settings.UnitId, address, 1),
             cancellationToken).ConfigureAwait(false);
 
         await WriteRegisterAsync(address, ProtocolCodec.SetBit(current[0], bit, value), cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>在超时窗口内反复读取状态区，直到条件成立。</summary>
-    private async Task<bool> WaitForStatusAsync(
-        Func<ushort[], bool> predicate,
+    /// <summary>在超时窗口内反复读取轮询块，直到协议画像判定命令已达成。</summary>
+    private async Task<bool> WaitForSatisfactionAsync(
+        ShuttleCarCommand command,
         TimeSpan timeout,
         CancellationToken cancellationToken)
     {
         var watch = Stopwatch.StartNew();
         var start = (ushort)Math.Clamp(_settings.PollStartAddress, 0, ushort.MaxValue);
+        var quantity = (ushort)Math.Clamp(_profile.TotalLength, 1, MaxReadQuantity);
         while (watch.Elapsed < timeout)
         {
             var block = await ExecuteAsync(
-                master => master.ReadHoldingRegisters(_settings.UnitId, start, ProtocolMap.StatusLength),
+                master => master.ReadHoldingRegisters(_settings.UnitId, start, quantity),
                 cancellationToken).ConfigureAwait(false);
 
-            if (predicate(block))
+            var snapshot = _profile.Decode(block, start, DateTimeOffset.Now);
+            if (_profile.IsCommandSatisfied(command, snapshot))
             {
                 return true;
             }
@@ -377,12 +374,15 @@ public sealed class ModbusShuttleCarClient : IShuttleCarClient
         return false;
     }
 
-    /// <summary>状态区任务号（DInt@26，高字在前）。</summary>
-    private static int ReadTaskNumber(ushort[] block)
+    private static string CommandDisplayName(ShuttleCarCommandType type)
     {
-        return ProtocolCodec.ToInt32(
-            block[ProtocolMap.StatusTaskNumberRegister],
-            block[ProtocolMap.StatusTaskNumberRegister + 1]);
+        return type switch
+        {
+            ShuttleCarCommandType.InventoryReset => "盘点清零",
+            ShuttleCarCommandType.Initialize => "初始化",
+            ShuttleCarCommandType.ClearFault => "清除异常",
+            _ => type.ToString()
+        };
     }
 
     private Task WriteRegisterAsync(int address, ushort value, CancellationToken cancellationToken)
@@ -513,10 +513,10 @@ public sealed class ModbusShuttleCarClient : IShuttleCarClient
         return ExecuteAsync(master => master.ReadHoldingRegisters(unitId, start, quantity), cancellationToken);
     }
 
-    /// <summary>按 ProtocolMap 解码轮询块并发布快照。</summary>
+    /// <summary>按 ProtocolMap 解码轮询块并发布快照；帧未变化时复用上一帧的字段集合。</summary>
     private void PublishSnapshot(IReadOnlyList<ushort> registers)
     {
-        var snapshot = ProtocolMap.Decode(registers, _settings.PollStartAddress, DateTimeOffset.Now);
+        var snapshot = _snapshotCache.Decode(registers, _settings.PollStartAddress, DateTimeOffset.Now);
         _lastSnapshot = snapshot;
         SnapshotUpdated?.Invoke(this, snapshot);
     }
