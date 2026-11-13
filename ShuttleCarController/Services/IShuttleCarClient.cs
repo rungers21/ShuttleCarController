@@ -7,7 +7,7 @@ namespace ShuttleCarController.Services;
 
 /// <summary>
 /// 穿梭车通信边界，是 UI/业务层与具体 Modbus 实现之间唯一的硬件交互接口。
-/// 根据当前需求，本项目只定义契约，不提供实际 TCP/RTU 通信实现。
+/// 本项目的默认实现为 <see cref="ModbusShuttleCarClient"/>（Modbus TCP）。
 /// </summary>
 /// <remarks>
 /// 实现方负责：连接管理、周期轮询、读写串行化、地址与字节序映射、任务握手、

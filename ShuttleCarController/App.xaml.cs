@@ -30,12 +30,8 @@ namespace ShuttleCarController
         {
             containerRegistry.RegisterSingleton<AppConfigStore>();
             containerRegistry.RegisterSingleton<ILogService, LogService>();
+            containerRegistry.RegisterSingleton<IShuttleCarClient, ModbusShuttleCarClient>();
             containerRegistry.RegisterSingleton<MainWindowViewModel>();
-
-            // 穿梭车通信实现按需求暂不提供。
-            // 接入时实现 IShuttleCarClient 并在此注册，例如：
-            // containerRegistry.RegisterSingleton<IShuttleCarClient, ModbusShuttleCarClient>();
-            // 未注册时，ViewModel 的可选通信参数为 null，所有硬件操作保持禁用。
         }
 
         /// <summary>

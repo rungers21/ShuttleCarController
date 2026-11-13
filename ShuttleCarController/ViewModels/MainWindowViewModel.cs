@@ -139,7 +139,10 @@ public sealed class MainWindowViewModel : BindableBase, IDisposable
         {
             _shuttleCarClient.StateChanged += OnClientStateChanged;
             _shuttleCarClient.SnapshotUpdated += OnSnapshotUpdated;
-            _logService.Info(LogCategory.System, "通信接口已注入。", "等待具体 IShuttleCarClient 实现执行 Modbus 通信。");
+            _logService.Info(
+                LogCategory.System,
+                "Modbus TCP 通信已注册。",
+                "轮询与业务命令按 ProtocolMap 联调映射读写；与实车对接前需按最终协议替换映射。");
         }
         else
         {
@@ -347,18 +350,18 @@ public sealed class MainWindowViewModel : BindableBase, IDisposable
         }
     }
 
-    /// <summary>原始读取使用的功能码选项，允许 03/04。</summary>
+    /// <summary>原始读取使用的功能码选项，允许 03/04；下拉框清空选择时回退到第一项，避免空引用崩溃。</summary>
     public FunctionCodeOption SelectedReadFunctionCode
     {
         get => _selectedReadFunctionCode;
-        set => Set(ref _selectedReadFunctionCode, value);
+        set => Set(ref _selectedReadFunctionCode, value ?? ReadFunctionCodes[0]);
     }
 
-    /// <summary>原始写入使用的功能码选项，允许 06/16。</summary>
+    /// <summary>原始写入使用的功能码选项，允许 06/16；下拉框清空选择时回退到第一项，避免空引用崩溃。</summary>
     public FunctionCodeOption SelectedWriteFunctionCode
     {
         get => _selectedWriteFunctionCode;
-        set => Set(ref _selectedWriteFunctionCode, value);
+        set => Set(ref _selectedWriteFunctionCode, value ?? WriteFunctionCodes[0]);
     }
 
     /// <summary>原始读写起始地址文本，支持十进制和 0x 前缀十六进制。</summary>
@@ -956,6 +959,19 @@ public sealed class MainWindowViewModel : BindableBase, IDisposable
             return false;
         }
 
+        if (Settings.PollQuantity is < 1 or > 125)
+        {
+            error = "轮询数量必须在 1～125 之间。";
+            return false;
+        }
+
+        if (Settings.PollStartAddress is < 0 or > 65535
+            || Settings.PollStartAddress + Settings.PollQuantity > 65536)
+        {
+            error = "轮询起始地址必须在 0～65535 之间，且轮询范围不能越过地址 65535。";
+            return false;
+        }
+
         error = string.Empty;
         return true;
     }
@@ -1053,7 +1069,13 @@ public sealed class MainWindowViewModel : BindableBase, IDisposable
     private void ApplySnapshot(ShuttleCarSnapshot snapshot)
     {
         var hadAlarm = Snapshot.HasAlarm;
+        var hadData = Snapshot.Quality == DataQuality.Good;
         Snapshot = snapshot;
+
+        if (!hadData && snapshot.Quality == DataQuality.Good)
+        {
+            StatusMessage = "已收到车辆状态。";
+        }
 
         if (snapshot.HasAlarm && !hadAlarm)
         {
@@ -1139,8 +1161,20 @@ public sealed class MainWindowViewModel : BindableBase, IDisposable
     /// </summary>
     private static bool Confirm(string message)
     {
+        var owner = Application.Current?.MainWindow;
+        if (owner is null)
+        {
+            // 窗口尚未创建或已关闭时，MessageBox 不接受 null owner，改用无 owner 重载。
+            return MessageBox.Show(
+                       message,
+                       "操作确认",
+                       MessageBoxButton.YesNo,
+                       MessageBoxImage.Warning,
+                       MessageBoxResult.No) == MessageBoxResult.Yes;
+        }
+
         return MessageBox.Show(
-                   Application.Current?.MainWindow,
+                   owner,
                    message,
                    "操作确认",
                    MessageBoxButton.YesNo,

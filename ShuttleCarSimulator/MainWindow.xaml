@@ -1,0 +1,226 @@
+<Window x:Class="ShuttleCarSimulator.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="穿梭车 PLC 仿真器" Height="800" Width="1120"
+        MinWidth="1100" MinHeight="760"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="CanResize">
+  <Grid Margin="20">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="220"/>
+    </Grid.RowDefinitions>
+
+    <!-- 顶部控制栏 -->
+    <Border Grid.Row="0" Style="{StaticResource CardStyle}" Padding="16">
+      <Grid VerticalAlignment="Center">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="80"/>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="60"/>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="120"/>
+          <ColumnDefinition Width="Auto"/>
+          <ColumnDefinition Width="16"/>
+          <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <TextBlock Grid.Column="0" Text="端口：" VerticalAlignment="Center" Style="{StaticResource LabelText}" Margin="0"/>
+        <TextBox Grid.Column="1" Text="{Binding PortText}" IsEnabled="{Binding CurrentStatus.Running, Converter={StaticResource InvertBool}}"/>
+
+        <TextBlock Grid.Column="2" Text="站号：" VerticalAlignment="Center" Style="{StaticResource LabelText}" Margin="16,0,0,0"/>
+        <TextBox Grid.Column="3" Text="{Binding UnitIdText}" IsEnabled="{Binding CurrentStatus.Running, Converter={StaticResource InvertBool}}"/>
+
+        <Button Grid.Column="4" Content="{Binding StartStopText}" Margin="16,0,0,0" Click="StartStopButton_Click" Style="{StaticResource PrimaryButton}"/>
+
+        <Ellipse Grid.Column="6" Width="12" Height="12" Fill="{Binding CurrentStatus.Running, Converter={StaticResource BoolToStatusBrush}}" VerticalAlignment="Center"/>
+
+        <TextBlock Grid.Column="8" Text="{Binding CurrentStatus.Message}" VerticalAlignment="Center" FontSize="13" TextTrimming="CharacterEllipsis" Margin="8,0,0,0"/>
+      </Grid>
+    </Border>
+
+    <!-- 主体内容 -->
+    <Grid Grid.Row="1" Margin="0,12,0,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="*"/>
+      </Grid.ColumnDefinitions>
+
+      <!-- 左侧：运行状态 -->
+      <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" Margin="0,0,8,0">
+        <StackPanel>
+          <Border Style="{StaticResource CardStyle}">
+            <StackPanel>
+              <TextBlock Text="车辆状态" Style="{StaticResource SectionHeader}"/>
+              <TextBlock Text="{Binding CurrentStatus.CarState}" Style="{StaticResource ValueText}"/>
+            </StackPanel>
+          </Border>
+
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Style="{StaticResource CardStyle}" Margin="0,0,6,12">
+              <StackPanel>
+                <TextBlock Text="任务号" Style="{StaticResource SectionHeader}"/>
+                <TextBlock Text="{Binding CurrentStatus.TaskNumber}" Style="{StaticResource ValueText}"/>
+              </StackPanel>
+            </Border>
+            <Border Grid.Column="1" Style="{StaticResource CardStyle}" Margin="6,0,0,12">
+              <StackPanel>
+                <TextBlock Text="任务完成" Style="{StaticResource SectionHeader}"/>
+                <TextBlock Text="{Binding CurrentStatus.TaskCompleted, Converter={StaticResource BoolToChinese}}" Style="{StaticResource ValueText}"/>
+              </StackPanel>
+            </Border>
+          </Grid>
+
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Style="{StaticResource CardStyle}" Margin="0,0,6,12">
+              <StackPanel>
+                <TextBlock Text="报警码" Style="{StaticResource SectionHeader}"/>
+                <TextBlock Text="{Binding CurrentStatus.AlarmCode}" Style="{StaticResource ValueText}"/>
+              </StackPanel>
+            </Border>
+            <Border Grid.Column="1" Style="{StaticResource CardStyle}" Margin="6,0,0,12">
+              <StackPanel>
+                <TextBlock Text="电量" Style="{StaticResource SectionHeader}"/>
+                <TextBlock Text="{Binding CurrentStatus.Battery}" Style="{StaticResource ValueText}"/>
+              </StackPanel>
+            </Border>
+          </Grid>
+
+          <Border Style="{StaticResource CardStyle}">
+            <StackPanel>
+              <TextBlock Text="位置" Style="{StaticResource SectionHeader}"/>
+              <TextBlock Text="{Binding CurrentStatus.Position}" Style="{StaticResource ValueText}"/>
+            </StackPanel>
+          </Border>
+
+          <Border Style="{StaticResource CardStyle}">
+            <StackPanel>
+              <TextBlock Text="层 / 列 / 排 / 巷道" Style="{StaticResource SectionHeader}"/>
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding CurrentStatus.Layer}" Style="{StaticResource ValueText}" Margin="0,0,16,0"/>
+                <TextBlock Text="/" Foreground="{StaticResource MutedBrush}" FontSize="18" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                <TextBlock Text="{Binding CurrentStatus.Column}" Style="{StaticResource ValueText}" Margin="0,0,16,0"/>
+                <TextBlock Text="/" Foreground="{StaticResource MutedBrush}" FontSize="18" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                <TextBlock Text="{Binding CurrentStatus.Row}" Style="{StaticResource ValueText}" Margin="0,0,16,0"/>
+                <TextBlock Text="/" Foreground="{StaticResource MutedBrush}" FontSize="18" VerticalAlignment="Center" Margin="0,0,16,0"/>
+                <TextBlock Text="{Binding CurrentStatus.Aisle}" Style="{StaticResource ValueText}"/>
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Style="{StaticResource CardStyle}" Margin="0,0,6,0">
+              <StackPanel>
+                <TextBlock Text="在A侧" Style="{StaticResource SectionHeader}"/>
+                <TextBlock Text="{Binding CurrentStatus.AtSideA, Converter={StaticResource BoolToChinese}}" Style="{StaticResource ValueText}"/>
+              </StackPanel>
+            </Border>
+            <Border Grid.Column="1" Style="{StaticResource CardStyle}" Margin="6,0,0,0">
+              <StackPanel>
+                <TextBlock Text="在B侧" Style="{StaticResource SectionHeader}"/>
+                <TextBlock Text="{Binding CurrentStatus.AtSideB, Converter={StaticResource BoolToChinese}}" Style="{StaticResource ValueText}"/>
+              </StackPanel>
+            </Border>
+          </Grid>
+
+          <Grid Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Style="{StaticResource CardStyle}" Margin="0,0,6,0">
+              <StackPanel>
+                <TextBlock Text="上方有货" Style="{StaticResource SectionHeader}"/>
+                <TextBlock Text="{Binding CurrentStatus.HasGoods, Converter={StaticResource BoolToChinese}}" Style="{StaticResource ValueText}"/>
+              </StackPanel>
+            </Border>
+            <Border Grid.Column="1" Style="{StaticResource CardStyle}" Margin="6,0,0,0">
+              <StackPanel>
+                <TextBlock Text="上方无货" Style="{StaticResource SectionHeader}"/>
+                <TextBlock Text="{Binding CurrentStatus.NoGoods, Converter={StaticResource BoolToChinese}}" Style="{StaticResource ValueText}"/>
+              </StackPanel>
+            </Border>
+          </Grid>
+        </StackPanel>
+      </ScrollViewer>
+
+      <!-- 右侧：故障开关与手动操作 -->
+      <Border Grid.Column="1" Style="{StaticResource CardStyle}" Margin="8,0,0,0">
+        <Grid IsEnabled="{Binding CurrentStatus.Running}">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+          </Grid.RowDefinitions>
+
+          <TextBlock Grid.Row="0" Text="故障开关" Style="{StaticResource SectionHeader}"/>
+
+          <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding FaultItems}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <StackPanel/>
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <CheckBox Content="{Binding DisplayText}" IsChecked="{Binding IsActive, Mode=TwoWay}"/>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+
+          <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,12,0,0">
+            <Button Content="模拟任务完成" Click="SimulateTaskComplete_Click" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"/>
+            <Button Content="清除所有故障" Click="ClearFaults_Click" Style="{StaticResource SecondaryButton}"/>
+          </StackPanel>
+
+          <Grid Grid.Row="3" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBox Grid.Column="0" Text="{Binding BatteryInput}" Margin="0,0,8,0"/>
+            <Button Grid.Column="1" Content="设置电量" Click="SetBattery_Click" Style="{StaticResource SecondaryButton}"/>
+          </Grid>
+
+          <Grid Grid.Row="4" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBox Grid.Column="0" Text="{Binding AlarmInput}" Margin="0,0,8,0"/>
+            <Button Grid.Column="1" Content="设置报警码" Click="SetAlarm_Click" Style="{StaticResource SecondaryButton}"/>
+          </Grid>
+        </Grid>
+      </Border>
+    </Grid>
+
+    <!-- 底部：原始寄存器表 -->
+    <Border Grid.Row="2" Style="{StaticResource CardStyle}" Margin="0,12,0,0" Padding="0">
+      <DataGrid ItemsSource="{Binding Registers}">
+        <DataGrid.Columns>
+          <DataGridTextColumn Header="地址" Binding="{Binding Address}" Width="80"/>
+          <DataGridTextColumn Header="十六进制" Binding="{Binding HexValue}" Width="120"/>
+          <DataGridTextColumn Header="十进制" Binding="{Binding DecimalValue}" Width="*"/>
+        </DataGrid.Columns>
+      </DataGrid>
+    </Border>
+  </Grid>
+</Window>

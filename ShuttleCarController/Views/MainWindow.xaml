@@ -107,7 +107,27 @@
 
                     <TextBlock Text="重连间隔 (ms)" Style="{StaticResource FieldLabelStyle}" />
                     <TextBox Text="{Binding Settings.ReconnectIntervalMs, UpdateSourceTrigger=PropertyChanged}"
-                             IsEnabled="{Binding IsConnectionSettingsEditable}" Margin="0,0,0,12" />
+                             IsEnabled="{Binding IsConnectionSettingsEditable}" Margin="0,0,0,8" />
+
+                    <Grid Margin="0,0,0,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="轮询起始地址" Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding Settings.PollStartAddress, UpdateSourceTrigger=PropertyChanged}"
+                                     IsEnabled="{Binding IsConnectionSettingsEditable}"
+                                     ToolTip="FC03 保持寄存器地址（十进制），按现场确认的映射填写" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="轮询数量" Style="{StaticResource FieldLabelStyle}" />
+                            <TextBox Text="{Binding Settings.PollQuantity, UpdateSourceTrigger=PropertyChanged}"
+                                     IsEnabled="{Binding IsConnectionSettingsEditable}"
+                                     ToolTip="1～125 个寄存器" />
+                        </StackPanel>
+                    </Grid>
 
                     <Grid Margin="0,0,0,12">
                         <Grid.ColumnDefinitions>
@@ -413,7 +433,7 @@
                         </Grid.RowDefinitions>
                         <StackPanel Grid.Row="0">
                             <TextBlock Text="数据表" Style="{StaticResource SectionTitleStyle}" />
-                            <TextBlock Text="字段由 IShuttleCarClient 按最终协议映射后提供；未确认地址显示为“待配置”。"
+                            <TextBlock Text="字段地址来自 ProtocolMap 联调映射；与实车对接前需按最终协议替换。"
                                        Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,8"
                                        TextWrapping="Wrap" />
                         </StackPanel>

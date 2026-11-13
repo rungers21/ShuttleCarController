@@ -34,6 +34,18 @@ public sealed class ConnectionSettings
     public int ReconnectIntervalMs { get; set; } = 3000;
 
     /// <summary>
+    /// 状态轮询使用的起始寄存器地址（FC03 保持寄存器）。
+    /// 默认 0 只代表一块可配置的观察区，不代表已确认的协议地址。
+    /// </summary>
+    public int PollStartAddress { get; set; }
+
+    /// <summary>
+    /// 状态轮询读取的寄存器数量，默认覆盖 ProtocolMap 的全部三个数据区（38 个寄存器）。
+    /// NModbus/Modbus 协议允许范围为 1～125；小于 38 时交互区字段显示为缺失。
+    /// </summary>
+    public int PollQuantity { get; set; } = 38;
+
+    /// <summary>
     /// 复制当前配置，防止通信后台读取配置时被界面编辑操作并发修改。
     /// </summary>
     public ConnectionSettings Clone()

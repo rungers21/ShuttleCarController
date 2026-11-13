@@ -9,7 +9,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <!-- NModbus 预留给后续 IShuttleCarClient 的 Modbus TCP/RTU 实现；当前代码只定义接口。 -->
+    <!-- NModbus 提供 Modbus TCP 主站通信（Services/ModbusShuttleCarClient）。 -->
     <PackageReference Include="NModbus" Version="3.0.83" />
     <!-- Prism 提供 MVVM、DelegateCommand 和 DryIoc 依赖注入。 -->
     <PackageReference Include="Prism.DryIoc" Version="9.0.537" />
